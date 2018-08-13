@@ -129,7 +129,7 @@ while running and not stoppingGuard.stop:
     r, w, e = select([serveSock, ], [], [], 0)
     for request in r:
         client, addr = serveSock.accept()
-        client.append(client)
+        clients.append(client)
         logging.warning('Client connected @' + str(addr))
     r, w, e = select([clients, ], [], [], 0)
 

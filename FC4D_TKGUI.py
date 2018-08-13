@@ -60,12 +60,12 @@ class Window(Frame):
         print(self.camera.PixelFormat.GetValue())
         # self.showImg()
 
-    def streamCamera(self):
+    def stream_camera(self):
         # text = Label(self, text='Flat Cam 4 Dummies')
         # text.pack()
         if not self.capturing:
-            self.captureWorker = Thread(target=self.captureFrames)
-            self.showWorker = Thread(target=self.showFrames)
+            self.captureWorker = Thread(target=self.capture_frames)
+            self.showWorker = Thread(target=self.show_frames)
             self.capturing = True
             self.captureWorker.start()
             self.showWorker.start()
@@ -76,7 +76,7 @@ class Window(Frame):
             self.captureWorker = None
             self.edit.entryconfigure('Stop Camera', label='Stream Camera')
 
-    def captureFrames(self):
+    def capture_frames(self):
         # self.camera.ExecuteSoftwareTrigger()
         while self.capturing:
             grabResult = self.camera.RetrieveResult(5000, py.TimeoutHandling_ThrowException)
@@ -92,7 +92,7 @@ class Window(Frame):
                 else:
                     grabResult.Release()
 
-    def showFrames(self):
+    def show_frames(self):
         while self.capturing:
             if self.newFrame.wait(0.01):
                 ratio = self.camImg.width / self.camImg.height
@@ -126,7 +126,7 @@ class Window(Frame):
                 self.imgWig.image = self.camImg
                 self.newFrame.clear()
 
-    def scheduleResize(self, event):
+    def schedule_resize(self, event):
         if self.resizePending:
             return
         self.resizePending = True
@@ -159,3 +159,4 @@ root.mainloop()
 if app.camera is not None:
     app.camera.StopGrabbing()
     app.camera.Close()
+
