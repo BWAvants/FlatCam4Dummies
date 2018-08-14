@@ -64,7 +64,7 @@ class PylonCam:
             try:
                 self.IFC.SetOutputPixelFormat(val)
                 self.pixelFormats.update({key: val})
-            except:
+            finally:
                 pass
         if 'PixelType_Mono16' in self.pixelFormats.keys():
             self.IFC.SetOutputPixelFormat(self.pixelFormats['PixelType_Mono16'])
@@ -93,21 +93,21 @@ class PylonCam:
         self.open_mm()
 
     def open_mm(self):
-        del (self.mm)
+        del self.mm
         if not os.path.exists(self.fname):
             with open(self.fname, 'r+b') as f:
                 f.write(b'\n' * (round(self.W * self.H * self.bytespp)))
         f = open(self.fname, 'r+b')
-        mm = np.memmap(f, dtype=self.dType, mode='w', shape=(self.W, self.H))
+        self.mm = np.memmap(f, dtype=self.dType, mode='w', shape=(self.W, self.H))
 
     def release_cam(self):
         try:
             self.cam.StopGrabbing()
-        except Exception as e:
+        finally:
             pass
         try:
             self.cam.Close()
-        except Exception as e:
+        finally:
             pass
 
 
