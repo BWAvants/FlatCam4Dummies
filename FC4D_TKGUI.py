@@ -29,10 +29,11 @@ class Window(Frame):
         self.newFrame = Event()
         self.oldW = self.winfo_width
         self.oldH = self.winfo_height
-        self.init_window()
         self.file = None
         self.edit = None
         self.resizePending = False
+        self.init_window()
+
 
     def init_window(self):
         self.master.title('FlatCam4Dummies')
@@ -48,7 +49,7 @@ class Window(Frame):
         master_menu.add_cascade(label='File', menu=self.file)
 
         self.edit = Menu(master_menu)
-        self.edit.add_command(label='Stream Camera', command=self.streamCamera)
+        self.edit.add_command(label='Stream Camera', command=self.stream_camera)
         master_menu.add_cascade(label='Image', menu=self.edit)
 
         self.camera = py.InstantCamera(py.TlFactory.GetInstance().CreateFirstDevice())
@@ -87,7 +88,7 @@ class Window(Frame):
                 if not self.newFrame.is_set():
                     imgt = np.copy(grabResult.Array)
                     grabResult.Release()
-                    self.camImg = Image.fromarray((imgt[0::4, 0::4] / 16).astype('uint8'))
+                    self.camImg = Image.fromarray((imgt[0::1, 0::1] / 16).astype('uint8'))
                     self.newFrame.set()
                 else:
                     grabResult.Release()

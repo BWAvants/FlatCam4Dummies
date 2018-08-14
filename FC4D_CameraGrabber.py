@@ -43,6 +43,7 @@ class PylonCam:
 
         self.cam = None
         self.IFC = None
+        self.opened = False
 
         self.dType = None
         self.bytespp = None
@@ -55,6 +56,7 @@ class PylonCam:
         self.fname = None
         self.mm = None
         self.grabbing = False
+        self.grabber = None
         self.imageClients = []
 
     def open_cam(self):
@@ -126,7 +128,10 @@ def grab_frames(pycam: PylonCam):
             pycam.mm[:] = grab_result.Array[:]
             grab_result.Release()
             for iClient in pycam.imageClients:
-                iClient.sendall(pycam.fname.encode('utf-8'))
+                sent = iClient.sendall(pycam.fname.encode('utf-8'))
+                if sent == 0:
+                    iClient.close()
+                    pycam.imageClients.remove(iClient)
 
 
 def manage_client(new_client, notification_event, message_queue, stop_flag):
@@ -164,27 +169,39 @@ def manage_client(new_client, notification_event, message_queue, stop_flag):
 
 def parse_message(message: str, client: socket.socket):
     global running, stoppingGuard, pyCam
-    if 'stop' in message:
+    cmd, argument = message.split(':')
+    if 'stop' in cmd:
         running = False
         logging.info('Stop Command: ' + client.getpeername())
         client.send(b'Stop Command Received')
-    elif 'release' in message:
+    elif 'release' in cmd:
         logging.info('Release Command: ' + client.getpeername())
         pyCam.release_cam()
         client.send(b'Release Command Received')
-    elif 'open' in message:
+    elif 'open' in cmd:
         logging.info('Open Command: ' + client.getpeername())
         pyCam.open_cam()
         client.send(b'Open Command Received')
-    elif 'activefile' in message:
+    elif 'activefile' in cmd:
         logging.info('Filename Request: ' + client.getpeername())
         client.send(pyCam.fname.encode('utf-8'))
-    elif 'notifyframe' in message:
-        pass
-    elif 'notifysetting' in message:
-        pass
-    elif 'notifyall' in message:
-        pass
+    elif 'notifyframe' in cmd:
+        try:
+            fclient = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            fclient.connect(('127.0.0.1', int(argument)))
+            pyCam.imageClients.append(fclient)
+        except socket.timeout:
+            logging.warning('Timeout on Frame Client Connect')
+            client.send(b'NCK')
+        else:
+            client.send(b'ACK')
+            logging.info('Frame Client Added :' + argument)
+    elif 'stream' in cmd:
+        if not pyCam.opened:
+            pyCam.open_cam()
+        if pyCam.grabber is None:
+            pyCam.grabber = Thread(target=grab_frames, args=(pyCam, ))
+            pyCam.grabber.start()
 
 
 if __name__ == '__main__':
