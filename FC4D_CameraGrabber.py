@@ -10,6 +10,7 @@ from select import select
 from threading import Thread, Event
 from queue import Queue, Full
 
+global stoppingGuard, running, pyCam
 
 class StopGuard:
     stop = False
@@ -25,9 +26,6 @@ class StopGuard:
     def term_rcvd(self, signum, frame):
         logging.warning('Terminate signal received')
         self.stop = True
-
-
-stoppingGuard = StopGuard()
 
 
 class PylonCam:
@@ -57,6 +55,7 @@ class PylonCam:
         self.fname = None
         self.mm = None
         self.grabbing = False
+        self.imageClients = []
 
     def open_cam(self):
         self.cam = py.InstantCamera(py.TlFactory.GetInstance().CreateFirstDevice())
@@ -95,7 +94,8 @@ class PylonCam:
         self.open_mm()
 
     def open_mm(self):
-        del self.mm
+        if self.mm is not None:
+            del self.mm
         if not os.path.exists(self.fname):
             with open(self.fname, 'r+b') as f:
                 f.write(b'\n' * (round(self.W * self.H * self.bytespp)))
@@ -103,14 +103,30 @@ class PylonCam:
         self.mm = np.memmap(f, dtype=self.dType, mode='w', shape=(self.W, self.H))
 
     def release_cam(self):
+        self.grabbing = False
         try:
             self.cam.StopGrabbing()
         finally:
-            pass
-        try:
-            self.cam.Close()
-        finally:
-            pass
+            try:
+                self.cam.Close()
+            finally:
+                del self.mm
+                self.mm = None
+                logging.info('Camera Released')
+
+
+def grab_frames(pycam: PylonCam):
+    pycam.grabbing = True
+    pycam.cam.StartGrabbing(py.GrabStrategy_LatestImageOnly)
+    while pycam.grabbing:
+        grab_result = pycam.cam.RetrieveResult(5000, py.TimeoutHandling_ThrowException)
+        if not pycam.grabbing:
+            continue
+        if grab_result.GrabSucceeded():
+            pycam.mm[:] = grab_result.Array[:]
+            grab_result.Release()
+            for iClient in pycam.imageClients:
+                iClient.sendall(pycam.fname.encode('utf-8'))
 
 
 def manage_client(new_client, notification_event, message_queue, stop_flag):
@@ -136,7 +152,7 @@ def manage_client(new_client, notification_event, message_queue, stop_flag):
                 put_in_queue = False
                 while not put_in_queue and not stop_flag:
                     try:
-                        message_queue.put(message, timeout=0.01)
+                        message_queue.put([message, c], timeout=0.01)
                     except Full:
                         logging.debug(__name__ + ': Message Queue Full')
                     except Exception as e:
@@ -146,7 +162,37 @@ def manage_client(new_client, notification_event, message_queue, stop_flag):
                 notification_event.set()
 
 
+def parse_message(message: str, client: socket.socket):
+    global running, stoppingGuard, pyCam
+    if 'stop' in message:
+        running = False
+        logging.info('Stop Command: ' + client.getpeername())
+        client.send(b'Stop Command Received')
+    elif 'release' in message:
+        logging.info('Release Command: ' + client.getpeername())
+        pyCam.release_cam()
+        client.send(b'Release Command Received')
+    elif 'open' in message:
+        logging.info('Open Command: ' + client.getpeername())
+        pyCam.open_cam()
+        client.send(b'Open Command Received')
+    elif 'activefile' in message:
+        logging.info('Filename Request: ' + client.getpeername())
+        client.send(pyCam.fname.encode('utf-8'))
+    elif 'notifyframe' in message:
+        pass
+    elif 'notifysetting' in message:
+        pass
+    elif 'notifyall' in message:
+        pass
+
+
 if __name__ == '__main__':
+
+    stoppingGuard = StopGuard()
+
+    pyCam = PylonCam()
+
     serveSock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     serveSock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     serveSock.bind(('127.0.0.1', 0xFC4D))
@@ -161,10 +207,15 @@ if __name__ == '__main__':
         r, w, e = select([serveSock, ], [], [], 0)
         for request in r:
             client, addr = serveSock.accept()
+            logging.info('Client connected @' + str(addr))
             new_client = Thread(target=manage_client, args=(client, notification_event, message_queue, running))
             new_client.start()
             clients.append(client)
-            logging.info('Client connected @' + str(addr))
+        notification_event.wait(0.01)
+        while not message_queue.empty() and running and not stoppingGuard.stop:
+            message, client = message_queue.get()
+            parse_message(message, client)
+        notification_event.clear()
 
     serveSock.shutdown(socket.SHUT_RDWR)
     serveSock.close()
