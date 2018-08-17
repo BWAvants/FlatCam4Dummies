@@ -12,6 +12,7 @@ from queue import Queue, Full
 
 global stoppingGuard, running, pyCam
 
+
 class StopGuard:
     stop = False
 
@@ -57,6 +58,7 @@ class PylonCam:
         self.mm = None
         self.grabbing = False
         self.grabber = None
+        self.FPS = 0
         self.imageClients = []
 
     def open_cam(self):
@@ -119,6 +121,9 @@ class PylonCam:
 
 def grab_frames(pycam: PylonCam):
     pycam.grabbing = True
+    last_time = 0
+    diff_times = [0] * 10
+    counter_time = 0
     pycam.cam.StartGrabbing(py.GrabStrategy_LatestImageOnly)
     while pycam.grabbing:
         grab_result = pycam.cam.RetrieveResult(5000, py.TimeoutHandling_ThrowException)
@@ -126,7 +131,15 @@ def grab_frames(pycam: PylonCam):
             continue
         if grab_result.GrabSucceeded():
             pycam.mm[:] = grab_result.Array[:]
+            this_time = grab_result.TimeStamp
             grab_result.Release()
+            if last_time > 0:
+                diff_times[counter_time] = this_time - last_time
+                counter_time = (counter_time + 1) % 10
+                if counter_time == 9:
+                    pycam.FPS = 10000000000 / sum(diff_times)
+            last_time = this_time
+
             for iClient in pycam.imageClients:
                 sent = iClient.sendall(pycam.fname.encode('utf-8'))
                 if sent == 0:
@@ -170,7 +183,7 @@ def manage_client(new_client, notification_event, message_queue, stop_flag):
 def parse_message(message: str, client: socket.socket):
     global running, stoppingGuard, pyCam
     cmd, argument = message.split(':')
-    if 'stop' in cmd:
+    if 'close' in cmd:
         running = False
         logging.info('Stop Command: ' + client.getpeername())
         client.send(b'Stop Command Received')
@@ -202,6 +215,11 @@ def parse_message(message: str, client: socket.socket):
         if pyCam.grabber is None:
             pyCam.grabber = Thread(target=grab_frames, args=(pyCam, ))
             pyCam.grabber.start()
+    elif 'stop' in cmd:
+        if pyCam.grabbing:
+            pyCam.grabbing = False
+            while pyCam.grabber.is_alive():
+                pyCam.grabber.join(0.01)
 
 
 if __name__ == '__main__':
@@ -210,7 +228,7 @@ if __name__ == '__main__':
 
     pyCam = PylonCam()
 
-    serveSock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    serveSock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     serveSock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     serveSock.bind(('127.0.0.1', 0xFC4D))
     serveSock.listen(128)
@@ -234,6 +252,8 @@ if __name__ == '__main__':
             parse_message(message, client)
         notification_event.clear()
 
+    if pyCam.mm is not None:
+        del(pyCam.mm)
     serveSock.shutdown(socket.SHUT_RDWR)
     serveSock.close()
     sys.exit()

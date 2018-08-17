@@ -29,6 +29,8 @@ class Window(Frame):
         self.newFrame = Event()
         self.oldW = self.winfo_width
         self.oldH = self.winfo_height
+        self.iw = self.oldW
+        self.ih = self.oldH
         self.file = None
         self.edit = None
         self.resizePending = False
@@ -79,19 +81,35 @@ class Window(Frame):
 
     def capture_frames(self):
         # self.camera.ExecuteSoftwareTrigger()
+        lastTime = 0
+        diffTimes = [0] * 10
+        frameCounter = 0
         while self.capturing:
             grabResult = self.camera.RetrieveResult(5000, py.TimeoutHandling_ThrowException)
             if not self.capturing:
                 continue
             # self.camera.ExecuteSoftwareTrigger()
             if grabResult.GrabSucceeded():
+                thisTime = grabResult.TimeStamp
                 if not self.newFrame.is_set():
                     imgt = np.copy(grabResult.Array)
                     grabResult.Release()
+                    if lastTime > 0:
+                        diffTimes[frameCounter] = thisTime - lastTime
+                    lastTime = thisTime
+                    frameCounter = (frameCounter + 1) % 10
+                    if frameCounter == 9:
+                        print(10000000000 / sum(diffTimes))
                     self.camImg = Image.fromarray((imgt[0::1, 0::1] / 16).astype('uint8'))
                     self.newFrame.set()
                 else:
                     grabResult.Release()
+                    grabResult.Release()
+                    diffTimes[frameCounter] = thisTime - lastTime
+                    lastTime = thisTime
+                    frameCounter = (frameCounter + 1) % 10
+                    if frameCounter == 9:
+                        print(10000000000 / sum(diffTimes))
 
     def show_frames(self):
         while self.capturing:
@@ -102,27 +120,27 @@ class Window(Frame):
                     self.oldW = mw
                     self.oldH = mh
                     if mw >= mh * ratio:
-                        ih = mh
-                        iw = round(mh * ratio)
+                        self.ih = mh
+                        self.iw = round(mh * ratio)
                     else:
-                        iw = mw
-                        ih = round(mw / ratio)
-                    self.camImg = ImageTk.PhotoImage(self.camImg.resize((iw, ih), resample))
+                        self.iw = mw
+                        self.ih = round(mw / ratio)
+                    self.camImg = ImageTk.PhotoImage(self.camImg.resize((self.iw, self.ih), resample))
                     self.imgWig = Label(self, image=self.camImg)
-                    self.imgWig.place(relx=0.5, rely=0.5, width=iw, height=ih, anchor=CENTER)
+                    self.imgWig.place(relx=0.5, rely=0.5, width=self.iw, height=self.ih, anchor=CENTER)
                 else:
                     mw, mh = (self.winfo_width(), self.winfo_height())
                     if self.oldH != mh or self.oldW != mw:
                         if mw >= mh * ratio:
-                            ih = mh
-                            iw = round(mh * ratio)
+                            self.ih = mh
+                            self.iw = round(mh * ratio)
                         else:
-                            iw = mw
-                            ih = round(mw / ratio)
-                        self.imgWig.place(relx=0.5, rely=0.5, width=iw, height=ih, anchor=CENTER)
+                            self.iw = mw
+                            self.ih = round(mw / ratio)
+                        self.imgWig.place(relx=0.5, rely=0.5, width=self.iw, height=self.ih, anchor=CENTER)
                         self.oldH = mh
                         self.oldW = mw
-                    self.camImg = ImageTk.PhotoImage(self.camImg.resize((iw, ih), resample))
+                    self.camImg = ImageTk.PhotoImage(self.camImg.resize((self.iw, self.ih), resample))
                     self.imgWig.configure(image=self.camImg)
                 self.imgWig.image = self.camImg
                 self.newFrame.clear()
