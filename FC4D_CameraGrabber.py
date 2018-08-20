@@ -150,6 +150,8 @@ def grab_frames(pycam: PylonCam):
 def manage_client(new_client, notification_event, message_queue, stop_flag):
     connected = True
     stream = ''
+    logging.info('Client Manager Started')
+    new_client.send('connected\n'.encode('utf-8'))
     while connected and not stop_flag:
         r, w, e = select([new_client, ], [], [], 0.01)
         for c in r:
@@ -164,6 +166,8 @@ def manage_client(new_client, notification_event, message_queue, stop_flag):
                     finally:
                         logging.info('Client Disconnected: ' + c.getpeername())
                 continue
+            logging.debug('Data received: ' + str(len(data)))
+            c.send(data)
             stream += data.decode('utf-8')
             while '\n' in stream and not stop_flag:
                 message, stream = stream.split('\n')
@@ -223,6 +227,28 @@ def parse_message(message: str, client: socket.socket):
 
 
 if __name__ == '__main__':
+
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-l', '--log_level', help='Specify log verbosity')
+
+    args = parser.parse_args()
+    if args.log_level:
+        if 'critical' in args.log_level:
+            logging.basicConfig(level=logging.CRITICAL)
+        elif 'error' in args.log_level:
+            logging.basicConfig(level=logging.ERROR)
+        elif 'warning' in args.log_level:
+            logging.basicConfig(level=logging.WARNING)
+        elif 'info' in args.log_level:
+            logging.basicConfig(level=logging.INFO)
+        elif 'debug' in args.log_level:
+            logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.WARNING)
+
+    logging.debug('Starting up MAIN')
 
     stoppingGuard = StopGuard()
 
