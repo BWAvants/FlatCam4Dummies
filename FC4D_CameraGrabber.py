@@ -235,12 +235,16 @@ def parse_message(message: str, client: socket.socket):
     elif 'activefile' in cmd:
         logging.info('Filename Request: ' + peername)
         if pyCam.fname is not None:
-            client.send((pyCam.fname + ':' + str((pyCam.H, pyCam.W)) + ':' + pyCam.dType + '\n').encode('utf-8'))
+            client.send(('ActiveFile(s):' + pyCam.fname + ':' + str(pyCam.H) + ':' + str(pyCam.W) +
+                         ':' + pyCam.dType + '\n').encode('utf-8'))
+        else:
+            client.send(b'No active file')
     elif 'framedonotify' in cmd:
         pyCam.add_image_client(client)
         logging.info('Frame Client Added :' + peername)
         if pyCam.fname is not None:
-            client.send((pyCam.fname + ':' + str((pyCam.H, pyCam.W)) + ':' + pyCam.dType + '\n').encode('utf-8'))
+            client.send(('ActiveFile(s):' + pyCam.fname + ':' + str(pyCam.H) + ':' + str(pyCam.W) +
+                         ':' + pyCam.dType + '\n').encode('utf-8'))
     elif 'farmenonotify' in cmd:
         pyCam.rem_image_client(client)
         logging.info('Frame Client Removed : ' + peername)
