@@ -57,16 +57,17 @@ class Window(Frame):
         self.camera = py.InstantCamera(py.TlFactory.GetInstance().CreateFirstDevice())
         self.IFC = py.ImageFormatConverter()
         self.IFC.SetOutputPixelFormat(py.PixelType_Mono16)
-        self.camera.Open()
-        self.camera.PixelFormat.SetValue('Mono12')
-        self.camera.StartGrabbing(py.GrabStrategy_LatestImageOnly)
-        print(self.camera.PixelFormat.GetValue())
+        # self.camera.Open()
+        # self.camera.PixelFormat.SetValue('Mono12')
+        # self.camera.StartGrabbing(py.GrabStrategy_LatestImageOnly)
         # self.showImg()
 
     def stream_camera(self):
         # text = Label(self, text='Flat Cam 4 Dummies')
         # text.pack()
         if not self.capturing:
+            self.camera.Open()
+            self.camera.StartGrabbing(py.GrabStrategy_LatestImageOnly)
             self.captureWorker = Thread(target=self.capture_frames)
             self.showWorker = Thread(target=self.show_frames)
             self.capturing = True
@@ -77,6 +78,7 @@ class Window(Frame):
             self.capturing = False
             self.captureWorker.join(1)
             self.captureWorker = None
+            self.camera.Close()
             self.edit.entryconfigure('Stop Camera', label='Stream Camera')
 
     def capture_frames(self):
@@ -104,12 +106,12 @@ class Window(Frame):
                     self.newFrame.set()
                 else:
                     grabResult.Release()
-                    grabResult.Release()
                     diffTimes[frameCounter] = thisTime - lastTime
                     lastTime = thisTime
                     frameCounter = (frameCounter + 1) % 10
                     if frameCounter == 9:
                         print(10000000000 / sum(diffTimes))
+        self.camera.StopGrabbing()
 
     def show_frames(self):
         while self.capturing:

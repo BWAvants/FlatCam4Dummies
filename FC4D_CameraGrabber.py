@@ -3,12 +3,14 @@ import os
 import signal
 import sys
 from pypylon import pylon as py
+from pypylon import genicam
 import numpy as np
 # from multiprocessing import Process, Event
 import socket
 from select import select
 from threading import Thread, Event
 from queue import Queue, Full
+from time import time
 
 global stoppingGuard, running, pyCam
 
@@ -69,7 +71,7 @@ class PylonCam:
             try:
                 self.IFC.SetOutputPixelFormat(val)
                 self.pixelFormats.update({key: val})
-            finally:
+            except genicam.RuntimeException:
                 pass
         if 'PixelType_Mono16' in self.pixelFormats.keys():
             self.IFC.SetOutputPixelFormat(self.pixelFormats['PixelType_Mono16'])
@@ -93,7 +95,9 @@ class PylonCam:
         self.f = self.cam.PixelFormat.GetValue()
         self.cam.Close()
 
-        self.fname = './Cam_' + self.SN + '__' + str(self.W) + 'x' + str(self.H) + '-' + self.f + '.npy'
+        path_str = './Cam_' + self.SN + '__' + str(self.W) + 'x' + str(self.H) + '-' + self.f + '.npy'
+        self.fname = os.path.abspath(path_str)
+        print(self.fname)
 
         self.open_mm()
 
@@ -101,22 +105,31 @@ class PylonCam:
         if self.mm is not None:
             del self.mm
         if not os.path.exists(self.fname):
-            with open(self.fname, 'r+b') as f:
+            with open(self.fname, 'w+b') as f:
                 f.write(b'\n' * (round(self.W * self.H * self.bytespp)))
         f = open(self.fname, 'r+b')
-        self.mm = np.memmap(f, dtype=self.dType, mode='w', shape=(self.W, self.H))
+        self.mm = np.memmap(f, dtype=self.dType, mode='w+', shape=(self.H, self.W))
 
     def release_cam(self):
         self.grabbing = False
-        try:
-            self.cam.StopGrabbing()
-        finally:
+        if self.cam is not None:
             try:
-                self.cam.Close()
+                self.cam.StopGrabbing()
             finally:
-                del self.mm
-                self.mm = None
-                logging.info('Camera Released')
+                try:
+                    self.cam.Close()
+                finally:
+                    del self.mm
+                    self.mm = None
+                    logging.info('Camera Released')
+
+    def add_image_client(self, image_client):
+        if not image_client in self.imageClients:
+            self.imageClients.append(image_client)
+
+    def rem_image_client(self, image_client):
+        if image_client in self.imageClients:
+            self.imageClients.remove(image_client)
 
 
 def grab_frames(pycam: PylonCam):
@@ -141,38 +154,51 @@ def grab_frames(pycam: PylonCam):
             last_time = this_time
 
             for iClient in pycam.imageClients:
-                sent = iClient.sendall(pycam.fname.encode('utf-8'))
+                sent = iClient.sendall(('cap:' + str(time()) + '\n').encode('utf-8'))
                 if sent == 0:
                     iClient.close()
                     pycam.imageClients.remove(iClient)
+    pycam.cam.StopGrabbing()
 
 
-def manage_client(new_client, notification_event, message_queue, stop_flag):
+def manage_client(new_client, notification_event, message_queue):
+    global running
     connected = True
+    peername = str(new_client.getpeername())
     stream = ''
     logging.info('Client Manager Started')
     new_client.send('connected\n'.encode('utf-8'))
-    while connected and not stop_flag:
+    while connected and running:
         r, w, e = select([new_client, ], [], [], 0.01)
         for c in r:
-            data = c.recv(1024)
+            try:
+                data = c.recv(1024)
+            except ConnectionResetError as e:
+                logging.debug(e)
+                connected = False
+                try:
+                    c.shutdown(socket.SHUT_RDWR)
+                except OSError as e:
+                    logging.debug(e)
+                finally:
+                    c.close()
+                    logging.info('Client Disconnected: ' + peername)
+                continue
             if len(data) == 0:
                 connected = False
                 try:
                     c.shutdown(socket.SHUT_RDWR)
+                except OSError as e:
+                    logging.debug(e)
                 finally:
-                    try:
-                        c.close()
-                    finally:
-                        logging.info('Client Disconnected: ' + c.getpeername())
-                continue
-            logging.debug('Data received: ' + str(len(data)))
-            c.send(data)
+                    c.close()
+                    logging.info('Client Disconnected: ' + peername)
+            logging.debug('Data received: ' + data.decode('utf-8'))
             stream += data.decode('utf-8')
-            while '\n' in stream and not stop_flag:
-                message, stream = stream.split('\n')
+            while '\n' in stream and running:
+                message, stream = stream.split('\n', 1)
                 put_in_queue = False
-                while not put_in_queue and not stop_flag:
+                while not put_in_queue and running:
                     try:
                         message_queue.put([message, c], timeout=0.01)
                     except Full:
@@ -182,37 +208,43 @@ def manage_client(new_client, notification_event, message_queue, stop_flag):
                     else:
                         put_in_queue = True
                 notification_event.set()
+    logging.info('Client Manager Closing: ' + peername)
 
 
 def parse_message(message: str, client: socket.socket):
     global running, stoppingGuard, pyCam
-    cmd, argument = message.split(':')
+    peername = str(client.getpeername())
+    parts = message.split(':', 1)
+    cmd = parts[0]
+    if len(parts) > 1:
+        argument = parts[1]
+    else:
+        argument = None
     if 'close' in cmd:
         running = False
-        logging.info('Stop Command: ' + client.getpeername())
-        client.send(b'Stop Command Received')
+        logging.info('Stop Command: ' + peername)
+        client.send(b'Stop Command Received\n')
     elif 'release' in cmd:
-        logging.info('Release Command: ' + client.getpeername())
+        logging.info('Release Command: ' + peername)
         pyCam.release_cam()
-        client.send(b'Release Command Received')
+        client.send(b'Release Command Received\n')
     elif 'open' in cmd:
-        logging.info('Open Command: ' + client.getpeername())
+        logging.info('Open Command: ' + peername)
         pyCam.open_cam()
-        client.send(b'Open Command Received')
+        client.send(b'Open Command Received\n')
     elif 'activefile' in cmd:
-        logging.info('Filename Request: ' + client.getpeername())
-        client.send(pyCam.fname.encode('utf-8'))
-    elif 'notifyframe' in cmd:
-        try:
-            fclient = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            fclient.connect(('127.0.0.1', int(argument)))
-            pyCam.imageClients.append(fclient)
-        except socket.timeout:
-            logging.warning('Timeout on Frame Client Connect')
-            client.send(b'NCK')
-        else:
-            client.send(b'ACK')
-            logging.info('Frame Client Added :' + argument)
+        logging.info('Filename Request: ' + peername)
+        if pyCam.fname is not None:
+            client.send((pyCam.fname + ':' + str((pyCam.H, pyCam.W)) + ':' + pyCam.dType + '\n').encode('utf-8'))
+    elif 'framedonotify' in cmd:
+        pyCam.add_image_client(client)
+        logging.info('Frame Client Added :' + peername)
+        if pyCam.fname is not None:
+            client.send((pyCam.fname + ':' + str((pyCam.H, pyCam.W)) + ':' + pyCam.dType + '\n').encode('utf-8'))
+    elif 'farmenonotify' in cmd:
+        pyCam.rem_image_client(client)
+        logging.info('Frame Client Removed : ' + peername)
+        client.send(b'Unsubscribed\n')
     elif 'stream' in cmd:
         if not pyCam.opened:
             pyCam.open_cam()
@@ -224,6 +256,7 @@ def parse_message(message: str, client: socket.socket):
             pyCam.grabbing = False
             while pyCam.grabber.is_alive():
                 pyCam.grabber.join(0.01)
+            pyCam.grabber = None
 
 
 if __name__ == '__main__':
@@ -248,7 +281,7 @@ if __name__ == '__main__':
     else:
         logging.basicConfig(level=logging.WARNING)
 
-    logging.debug('Starting up MAIN')
+    logging.debug('Starting up CameraGrabber')
 
     stoppingGuard = StopGuard()
 
@@ -269,19 +302,22 @@ if __name__ == '__main__':
         for request in r:
             client, addr = serveSock.accept()
             logging.info('Client connected @' + str(addr))
-            new_client = Thread(target=manage_client, args=(client, notification_event, message_queue, running))
+            new_client = Thread(target=manage_client, args=(client, notification_event, message_queue))
             new_client.start()
-            clients.append(client)
-        notification_event.wait(0.01)
-        while not message_queue.empty() and running and not stoppingGuard.stop:
-            message, client = message_queue.get()
-            parse_message(message, client)
-        notification_event.clear()
+            clients.append(new_client)
+        if notification_event.wait(0.01):
+            while not message_queue.empty() and running and not stoppingGuard.stop:
+                message, client = message_queue.get()
+                parse_message(message, client)
+            notification_event.clear()
 
-    if pyCam.mm is not None:
-        del(pyCam.mm)
-    serveSock.shutdown(socket.SHUT_RDWR)
+    logging.warning('Shutting Down')
+    running = False
+    pyCam.release_cam()
     serveSock.close()
+    for c in clients:
+        while c.is_alive():
+            c.join(0.01)
     sys.exit()
 
 
